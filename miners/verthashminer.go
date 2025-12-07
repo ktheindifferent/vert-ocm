@@ -22,6 +22,10 @@ type VerthashMinerImpl struct {
 	binaryRunner  *BinaryRunner
 	clhashRates   map[int64]uint64
 	cuhashRates   map[int64]uint64
+	mtlhashRates  map[int64]uint64
+	clDeviceNames map[int64]string
+	cuDeviceNames map[int64]string
+	mtlDeviceNames map[int64]string
 	hashRatesLock sync.Mutex
 }
 
@@ -42,7 +46,16 @@ func (l *VerthashMinerImpl) generateTempConf() error {
 }
 
 func NewVerthashMinerImpl(br *BinaryRunner) MinerImpl {
-	return &VerthashMinerImpl{binaryRunner: br, clhashRates: map[int64]uint64{}, cuhashRates: map[int64]uint64{}, hashRatesLock: sync.Mutex{}}
+	return &VerthashMinerImpl{
+		binaryRunner: br,
+		clhashRates: map[int64]uint64{},
+		cuhashRates: map[int64]uint64{},
+		mtlhashRates: map[int64]uint64{},
+		clDeviceNames: map[int64]string{},
+		cuDeviceNames: map[int64]string{},
+		mtlDeviceNames: map[int64]string{},
+		hashRatesLock: sync.Mutex{},
+	}
 }
 
 func (l *VerthashMinerImpl) Configure(args BinaryArguments) error {
@@ -147,7 +160,49 @@ func (l *VerthashMinerImpl) ParseOutput(line string) {
 		logging.Debugf("[VerthashMiner] %s\n", line)
 	}
 	line = strings.TrimSpace(line)
+
+	// Parse Metal device initialization: "Configured Metal worker for discrete GPU: AMD Radeon Pro 5500M"
+	if strings.Contains(line, "Configured Metal worker for discrete GPU:") {
+		parts := strings.Split(line, ": ")
+		if len(parts) >= 2 {
+			deviceName := parts[len(parts)-1]
+			l.hashRatesLock.Lock()
+			l.mtlDeviceNames[0] = deviceName  // Currently single Metal device
+			l.hashRatesLock.Unlock()
+		}
+	}
+
+	// Parse Metal hashrate: "mtl_device: hashrate: X.XX kH/s"
+	if strings.Contains(line, "mtl_device:") && strings.HasSuffix(line, "H/s") {
+		logging.Debugf("[Metal Hashrate] Matched line: %s", line)
+		startMHs := strings.LastIndex(line, ": ")
+		if startMHs > -1 {
+			hashRateUnit := strings.ToUpper(line[len(line)-4 : len(line)-3])
+			hrStr := line[startMHs+2 : len(line)-5]
+			logging.Debugf("[Metal Hashrate] Extracted: %s %sH/s", hrStr, hashRateUnit)
+			f, err := strconv.ParseFloat(hrStr, 64)
+			if err != nil {
+				logging.Errorf("Error parsing Metal hashrate: %s\n", err.Error())
+			} else {
+				if hashRateUnit == "K" {
+					f = f * 1000
+				} else if hashRateUnit == "M" {
+					f = f * 1000 * 1000
+				} else if hashRateUnit == "G" {
+					f = f * 1000 * 1000 * 1000
+				}
+
+				l.hashRatesLock.Lock()
+				l.mtlhashRates[0] = uint64(f)  // Currently single Metal device
+				l.hashRatesLock.Unlock()
+				logging.Debugf("[Metal Hashrate] Set mtlhashRates[0] = %d", uint64(f))
+			}
+		}
+	}
+
+	// Parse OpenCL/CUDA hashrates: "cl_device(0): hashrate: X.XX kH/s"
 	if strings.Contains(line, "_device(") && strings.HasSuffix(line, "H/s") {
+		logging.Debugf("[CL/CU Hashrate] Matched line: %s", line)
 		startMHs := strings.LastIndex(line, ": ")
 		if startMHs > -1 {
 			deviceIdxStart := strings.Index(line, "_device(") + 8
@@ -158,26 +213,30 @@ func (l *VerthashMinerImpl) ParseOutput(line string) {
 			deviceType := line[deviceTypeStart : deviceTypeStart+2]
 
 			hashRateUnit := strings.ToUpper(line[len(line)-4 : len(line)-3])
-			line = line[startMHs+2 : len(line)-5]
-			f, err := strconv.ParseFloat(line, 64)
+			hrStr := line[startMHs+2 : len(line)-5]
+			logging.Debugf("[CL/CU Hashrate] Device: %s(%d), Extracted: %s %sH/s", deviceType, deviceIdx, hrStr, hashRateUnit)
+			f, err := strconv.ParseFloat(hrStr, 64)
 			if err != nil {
 				logging.Errorf("Error parsing hashrate: %s\n", err.Error())
-			}
-			if hashRateUnit == "K" {
-				f = f * 1000
-			} else if hashRateUnit == "M" {
-				f = f * 1000 * 1000
-			} else if hashRateUnit == "G" {
-				f = f * 1000 * 1000 * 1000
-			}
-
-			l.hashRatesLock.Lock()
-			if deviceType == "cu" {
-				l.cuhashRates[deviceIdx] = uint64(f)
 			} else {
-				l.clhashRates[deviceIdx] = uint64(f)
+				if hashRateUnit == "K" {
+					f = f * 1000
+				} else if hashRateUnit == "M" {
+					f = f * 1000 * 1000
+				} else if hashRateUnit == "G" {
+					f = f * 1000 * 1000 * 1000
+				}
+
+				l.hashRatesLock.Lock()
+				if deviceType == "cu" {
+					l.cuhashRates[deviceIdx] = uint64(f)
+					logging.Debugf("[CL/CU Hashrate] Set cuhashRates[%d] = %d", deviceIdx, uint64(f))
+				} else {
+					l.clhashRates[deviceIdx] = uint64(f)
+					logging.Debugf("[CL/CU Hashrate] Set clhashRates[%d] = %d", deviceIdx, uint64(f))
+				}
+				l.hashRatesLock.Unlock()
 			}
-			l.hashRatesLock.Unlock()
 		}
 	}
 }
@@ -189,6 +248,9 @@ func (l *VerthashMinerImpl) HashRate() uint64 {
 		totalHash += h
 	}
 	for _, h := range l.clhashRates {
+		totalHash += h
+	}
+	for _, h := range l.mtlhashRates {
 		totalHash += h
 	}
 	l.hashRatesLock.Unlock()
@@ -238,4 +300,84 @@ func (l *VerthashMinerImpl) AvailableGPUs() int8 {
 	in.Close()
 	os.Remove(tmpCfg)
 	return gpu
+}
+
+func (l *VerthashMinerImpl) GetDevices() []DeviceInfo {
+	devices := []DeviceInfo{}
+
+	l.hashRatesLock.Lock()
+	defer l.hashRatesLock.Unlock()
+
+	logging.Debugf("[GetDevices] CL: %d, CU: %d, MTL: %d devices", len(l.clhashRates), len(l.cuhashRates), len(l.mtlhashRates))
+
+	// Add OpenCL devices
+	for id, hr := range l.clhashRates {
+		name := l.clDeviceNames[id]
+		if name == "" {
+			name = fmt.Sprintf("OpenCL Device %d", id)
+		}
+		devices = append(devices, DeviceInfo{
+			DeviceID:     id,
+			DeviceName:   name,
+			DeviceType:   "OpenCL",
+			HashRate:     hr,
+			HashRateStr:  formatHashRate(hr),
+		})
+	}
+
+	// Add CUDA devices
+	for id, hr := range l.cuhashRates {
+		name := l.cuDeviceNames[id]
+		if name == "" {
+			name = fmt.Sprintf("CUDA Device %d", id)
+		}
+		devices = append(devices, DeviceInfo{
+			DeviceID:     id,
+			DeviceName:   name,
+			DeviceType:   "CUDA",
+			HashRate:     hr,
+			HashRateStr:  formatHashRate(hr),
+		})
+	}
+
+	// Add Metal devices
+	for id, hr := range l.mtlhashRates {
+		name := l.mtlDeviceNames[id]
+		if name == "" {
+			name = fmt.Sprintf("Metal Device %d", id)
+		}
+		devices = append(devices, DeviceInfo{
+			DeviceID:     id,
+			DeviceName:   name,
+			DeviceType:   "Metal",
+			HashRate:     hr,
+			HashRateStr:  formatHashRate(hr),
+		})
+	}
+
+	return devices
+}
+
+func formatHashRate(hashrate uint64) string {
+	hashrateFloat := float64(hashrate)
+	hashrateUnit := "H/s"
+
+	if hashrateFloat > 1000 {
+		hashrateFloat = hashrateFloat / 1000
+		hashrateUnit = "kH/s"
+	}
+	if hashrateFloat > 1000 {
+		hashrateFloat = hashrateFloat / 1000
+		hashrateUnit = "MH/s"
+	}
+	if hashrateFloat > 1000 {
+		hashrateFloat = hashrateFloat / 1000
+		hashrateUnit = "GH/s"
+	}
+	if hashrateFloat > 1000 {
+		hashrateFloat = hashrateFloat / 1000
+		hashrateUnit = "TH/s"
+	}
+
+	return fmt.Sprintf("%0.2f %s", hashrateFloat, hashrateUnit)
 }

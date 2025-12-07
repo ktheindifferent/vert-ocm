@@ -97,3 +97,7 @@ func (l *TeamRedMinerImpl) AvailableGPUs() int8 {
 	// Output is caught by ParseOuput function above and this will set the gpuCount accordingly
 	return l.gpuCount
 }
+
+func (l *TeamRedMinerImpl) GetDevices() []DeviceInfo {
+	return []DeviceInfo{}
+}

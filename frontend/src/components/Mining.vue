@@ -70,7 +70,16 @@
         <span style="opacity: 1">{{$t('mining.active_pool')}}: {{activePool}} <span v-if="poolFee != '0.0%'">({{$t('mining.pool_fee')}}: {{poolFee}})</span></span>
         <br><a class="link" @click="payoutInformation">{{ $t('mining.payout_information') }}</a>
       </p>
-      
+
+      <div v-if="miningDevices.length > 0" class="devices-section">
+        <p class="spacer">&nbsp;</p>
+        <p class="header">Mining Devices:</p>
+        <div v-for="device in miningDevices" :key="device.deviceId + device.deviceType" class="device-item">
+          <p class="device-name">{{device.deviceName}}</p>
+          <p class="device-details">{{device.deviceType}} | {{device.hashRateStr}}</p>
+        </div>
+      </div>
+
       <p class="spacer">&nbsp;</p>
       <p v-if="runningMiners === 0">{{$t('mining.waiting_for_miners')}}</p>
       <p v-if="runningMiners > 0" class="header">{{$t('mining.expected_earnings_24h')}}:</p>
@@ -109,6 +118,7 @@ export default {
       poolFee: "0.0%",
       activePool: "",
       address:"",
+      miningDevices: [],
     };
   },
   mounted() {
@@ -160,6 +170,9 @@ export default {
     });
     window.wails.Events.On("balancePendingPool", result => {
       self.balancePendingPool = result;
+    });
+    window.wails.Events.On("miningDevices", result => {
+      self.miningDevices = result;
     });
     window.backend.Backend.RefreshBalance();
     window.backend.Backend.RefreshHashrate();
@@ -266,6 +279,40 @@ a.link {
   opacity: 0.6;
   text-decoration: underline;
   cursor: pointer;
+}
+
+.devices-section {
+  margin-top: 10px;
+}
+
+.device-item {
+  margin: 8px 0;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+}
+
+.device-name {
+  margin: 0;
+  padding: 0;
+  font-size: 14px;
+  font-weight: bold;
+  color: #048652;
+}
+
+.device-details {
+  margin: 2px 0 0 0;
+  padding: 0;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.device-waiting {
+  margin: 8px 0;
+  padding: 8px;
+  font-size: 12px;
+  opacity: 0.6;
+  font-style: italic;
 }
 
 </style>

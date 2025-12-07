@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,10 +36,28 @@ type MinerBinary struct {
 
 func GetMinerBinaries() []MinerBinary {
 	binaries := []MinerBinary{}
-	err := util.GetJson("https://raw.githubusercontent.com/vertcoin-project/one-click-miner-vnext/master/miners.json", &binaries)
-	if err != nil {
-		logging.Errorf("Error fetching miner binaries: %v", err)
-		return binaries
+
+	// Try to load local miners.json first (for development)
+	localMinersPath := "miners.json"
+	if _, err := os.Stat(localMinersPath); err == nil {
+		data, err := os.ReadFile(localMinersPath)
+		if err == nil {
+			err = json.Unmarshal(data, &binaries)
+			if err == nil {
+				logging.Infof("Loaded miners from local file: %s", localMinersPath)
+			} else {
+				logging.Warnf("Error parsing local miners.json: %v", err)
+			}
+		}
+	}
+
+	// If local file doesn't exist or failed to parse, fetch from GitHub
+	if len(binaries) == 0 {
+		err := util.GetJson("https://raw.githubusercontent.com/vertcoin-project/one-click-miner-vnext/master/miners.json", &binaries)
+		if err != nil {
+			logging.Errorf("Error fetching miner binaries: %v", err)
+			return binaries
+		}
 	}
 	for i := range binaries {
 		if binaries[i].GpuPlatformString == "AMD" {
@@ -54,12 +73,22 @@ func GetMinerBinaries() []MinerBinary {
 	return binaries
 }
 
+// DeviceInfo represents information about a mining device
+type DeviceInfo struct {
+	DeviceID     int64   `json:"deviceId"`
+	DeviceName   string  `json:"deviceName"`
+	DeviceType   string  `json:"deviceType"` // "OpenCL", "CUDA", "Metal"
+	HashRate     uint64  `json:"hashRate"`   // in H/s
+	HashRateStr  string  `json:"hashRateStr"` // formatted string (e.g., "27.05 kH/s")
+}
+
 type MinerImpl interface {
 	ParseOutput(line string)
 	Configure(args BinaryArguments) error
 	HashRate() uint64
 	ConstructCommandlineArgs(args BinaryArguments) []string
 	AvailableGPUs() int8
+	GetDevices() []DeviceInfo
 }
 
 func NewBinaryRunner(m MinerBinary, prerequisiteInstall chan bool) (*BinaryRunner, error) {
@@ -375,6 +404,29 @@ func (b *BinaryRunner) ensureAvailable() error {
 func (b *BinaryRunner) download() error {
 	nodePath := b.downloadPath()
 
+	// Support file:// URLs for local files
+	if strings.HasPrefix(b.MinerBinary.Url, "file://") {
+		localPath := strings.TrimPrefix(b.MinerBinary.Url, "file://")
+		logging.Debugf("%sCopying from local file: %s", b.logPrefix(), localPath)
+
+		source, err := os.Open(localPath)
+		if err != nil {
+			return err
+		}
+		defer source.Close()
+
+		dest, err := os.Create(nodePath)
+		if err != nil {
+			return err
+		}
+		defer dest.Close()
+
+		_, err = io.Copy(dest, source)
+		logging.Debugf("%sFile copied from local source", b.logPrefix())
+		return err
+	}
+
+	// HTTP/HTTPS download
 	resp, err := http.Get(b.MinerBinary.Url)
 	if err != nil {
 		return err

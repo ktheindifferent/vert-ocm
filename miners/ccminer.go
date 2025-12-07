@@ -98,3 +98,7 @@ func (l *CCMinerImpl) AvailableGPUs() int8 {
 	// Output is caught by ParseOuput function above and this will set the gpuCount accordingly
 	return l.gpuCount
 }
+
+func (l *CCMinerImpl) GetDevices() []DeviceInfo {
+	return []DeviceInfo{}
+}

@@ -122,6 +122,14 @@ func (m *Backend) StartMining() bool {
 
 			m.runtime.Events.Emit("avgEarnings", fmt.Sprintf("%0.2f VTC", avgEarning))
 
+			// Collect device information from all miners
+			allDevices := []miners.DeviceInfo{}
+			for _, br := range m.minerBinaries {
+				devices := br.MinerImpl.GetDevices()
+				allDevices = append(allDevices, devices...)
+			}
+			m.runtime.Events.Emit("miningDevices", allDevices)
+
 			select {
 			case <-m.stopHash:
 				continueLoop = false

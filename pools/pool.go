@@ -18,6 +18,7 @@ func GetPools(addr string, testnet bool) []Pool {
 		}
 	}
 	return []Pool{
+		NewWoolypooly(addr),
 		NewZergpool(addr),
 		NewSuprnova(addr),
 		NewP2Pool(addr),

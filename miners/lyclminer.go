@@ -170,3 +170,7 @@ func (l *LyclMinerImpl) AvailableGPUs() int8 {
 	os.Remove(tmpCfg)
 	return gpu
 }
+
+func (l *LyclMinerImpl) GetDevices() []DeviceInfo {
+	return []DeviceInfo{}
+}
